@@ -1,0 +1,12 @@
+name: IJCNN-2024
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11.6
+  - cudatoolkit=11.8.0
+  - cudnn=8.8.0
+  - cuquantum-python=23.10
+  - pip:
+      - pennylane==0.33.1
+      - 'pennylane-lightning[gpu]==0.33.1'
+      - lambeq==0.3.3
