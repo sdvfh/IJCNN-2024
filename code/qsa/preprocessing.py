@@ -1,6 +1,6 @@
 import keras_nlp
 import numpy as np
-import tensorflow as tf
+import pandas as pd
 from pytreebank import load_sst
 
 from .utils import Utils
@@ -10,10 +10,8 @@ class Preprocessing(Utils):
     def __init__(self):
         super().__init__()
         self._df = None
-        gpus = tf.config.experimental.list_physical_devices("GPU")
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        self.process()
+        self._process()
+        self._compress_data()
 
     @staticmethod
     def save(path, array):
@@ -33,7 +31,7 @@ class Preprocessing(Utils):
         dtype, w, h = header.decode("ascii").strip().split()
         return np.frombuffer(data, dtype=dtype).reshape((int(w), int(h)))
 
-    def process(self):
+    def _process(self):
         self._df = load_sst(self._path["data"])
 
         preprocessor = keras_nlp.models.BertPreprocessor.from_preset(
@@ -50,9 +48,9 @@ class Preprocessing(Utils):
             df = self._df[dataset_type]
 
             for i, line in enumerate(df):
-                print(f"Remaining: {len(df) - i}")
                 if (path_output / f"{i}.npy").exists():
                     continue
+                print(f"Remaining: {len(df) - i}")
                 original_label, sentence = line.to_labeled_lines()[0]
                 if original_label == 2:
                     label = -1
@@ -68,3 +66,25 @@ class Preprocessing(Utils):
                 with open(path_output / "dataset_type_labels.txt", "a+") as f:
                     f.write(f"{i},{label},{original_label}")
                     f.write("\n")
+
+    def _compress_data(self):
+        labels = []
+        for dataset_type in self._dataset_types:
+            path_output = self._path["data"] / dataset_type
+            dataset_labels = pd.read_csv(
+                path_output / "dataset_type_labels.txt",
+                header=None,
+                names=["id", "label", "original_label"],
+            )
+            dataset_labels["type"] = dataset_type
+            labels.append(dataset_labels)
+
+            outputs = []
+            for _, line in dataset_labels.iterrows():
+                sentence = line["id"]
+                output = self.load(path_output / f"{sentence}.npy")
+                outputs.append(output)
+            outputs = np.concatenate(outputs, axis=0)
+            self.save(self._path["data"] / f"{dataset_type}.npy", outputs)
+        labels = pd.concat(labels, axis=0)
+        labels.to_csv(self._path["data"] / "labels.csv", index=False)
