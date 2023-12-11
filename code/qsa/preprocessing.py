@@ -10,6 +10,8 @@ class Preprocessing(Utils):
     def __init__(self):
         super().__init__()
         self._df = None
+        if self._data_created():
+            return
         self._process()
         self._compress_data()
 
@@ -30,6 +32,11 @@ class Preprocessing(Utils):
             data = fh.read()
         dtype, w, h = header.decode("ascii").strip().split()
         return np.frombuffer(data, dtype=dtype).reshape((int(w), int(h)))
+
+    def _data_created(self):
+        if (self._path["data"] / "labels.csv").exists():
+            return True
+        return False
 
     def _process(self):
         self._df = load_sst(self._path["data"])
