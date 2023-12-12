@@ -9,29 +9,10 @@ from .utils import Utils
 class Preprocessing(Utils):
     def __init__(self):
         super().__init__()
-        self._df = None
         if self._data_created():
             return
         self._process()
         self._compress_data()
-
-    @staticmethod
-    def save(path, array):
-        with open(path, "wb+") as fh:
-            fh.write(
-                "{0:} {1:} {2:}\n".format(
-                    array.dtype, array.shape[0], array.shape[1]
-                ).encode("ascii")
-            )
-            fh.write(array.data)
-
-    @staticmethod
-    def load(path):
-        with open(path, "rb") as fh:
-            header = fh.readline()
-            data = fh.read()
-        dtype, w, h = header.decode("ascii").strip().split()
-        return np.frombuffer(data, dtype=dtype).reshape((int(w), int(h)))
 
     def _data_created(self):
         if (self._path["data"] / "labels.csv").exists():
@@ -39,7 +20,7 @@ class Preprocessing(Utils):
         return False
 
     def _process(self):
-        self._df = load_sst(self._path["data"])
+        df = load_sst(self._path["data"])
 
         preprocessor = keras_nlp.models.BertPreprocessor.from_preset(
             "bert_base_en_uncased", sequence_length=180
@@ -52,12 +33,12 @@ class Preprocessing(Utils):
             if not path_output.exists():
                 path_output.mkdir(parents=True)
 
-            df = self._df[dataset_type]
+            dataset = df[dataset_type]
 
-            for i, line in enumerate(df):
+            for i, line in enumerate(dataset):
                 if (path_output / f"{i}.npy").exists():
                     continue
-                print(f"Remaining: {len(df) - i}")
+                print(f"Remaining: {len(dataset) - i}")
                 original_label, sentence = line.to_labeled_lines()[0]
                 if original_label == 2:
                     label = -1
@@ -95,3 +76,29 @@ class Preprocessing(Utils):
             self.save(self._path["data"] / f"{dataset_type}.npy", outputs)
         labels = pd.concat(labels, axis=0)
         labels.to_csv(self._path["data"] / "labels.csv", index=False)
+
+    def _load_dataset(self):
+        labels = pd.read_csv(self._path["data"] / "labels.csv")
+        train = self.load(self._path["data"] / "train.npy")
+        dev = self.load(self._path["data"] / "dev.npy")
+        test = self.load(self._path["data"] / "test.npy")
+        if self._binary_problem:
+            labels = labels[labels["original_label"] != 2]
+
+            train = train[labels.loc[labels["type"] == "train", "id"].values]
+            dev = dev[labels.loc[labels["type"] == "dev", "id"].values]
+            test = test[labels.loc[labels["type"] == "test", "id"].values]
+        self.df = {
+            "train": {
+                "data": train,
+                "labels": labels[labels["type"] == "train"]["label"].values,
+            },
+            "dev": {
+                "data": dev,
+                "labels": labels[labels["type"] == "dev"]["label"].values,
+            },
+            "test": {
+                "data": test,
+                "labels": labels[labels["type"] == "test"]["label"].values,
+            },
+        }
