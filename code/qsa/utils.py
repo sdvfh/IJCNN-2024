@@ -16,7 +16,7 @@ from sklearn.metrics import (
 class Utils:
     _dataset_types = ["train", "dev", "test"]
     _IS_BINARY_PROBLEM = True
-    _n_rep = 3
+    _n_rep = 30
 
     def __init__(self):
         self._model = None
