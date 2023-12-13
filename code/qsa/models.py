@@ -104,17 +104,14 @@ class QuantumModel(Model):
 
 class XGBoost(ClassicalModel, ClassicalProcessing):
     name = "XGBoost"
-    # _hyperparameters = {
-    #     "max_depth": [6, 12, 24],
-    #     "learning_rate": [0.1, 0.01, 0.05],
-    #     "gamma": [0, 0.25, 1.0],
-    #     "reg_lambda": [0, 1.0, 10.0],
-    #     "scale_pos_weight": [1, 3, 5],
-    # }
-
     _hyperparameters = {
         "max_depth": [6, 12, 24],
+        "learning_rate": [0.1, 0.01, 0.05],
+        "gamma": [0, 0.25, 1.0],
+        "reg_lambda": [0, 1.0, 10.0],
+        "scale_pos_weight": [1, 3, 5],
     }
+
     _default_params = {
         "objective": "binary:logistic",
         "seed_per_iteration": True,
