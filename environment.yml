@@ -13,3 +13,4 @@ dependencies:
       - pytreebank==0.2.7
       - keras-nlp==0.6.4
       - tensorflow==2.15.0.post1
+      - scikit-plot==0.3.7
