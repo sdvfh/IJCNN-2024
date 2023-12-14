@@ -4,6 +4,8 @@ from itertools import product
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+from cuml.ensemble import RandomForestClassifier as cuRFC
+from sklearn.svm import SVC as skSVC
 
 
 class Model:
@@ -77,11 +79,15 @@ class Model:
     def predict(self, test=False):
         raise NotImplementedError
 
-    def get_salable_params(self):
-        raise NotImplementedError
+    def get_savable_params(self):
+        other_params = self._get_other_savable_params()
+        return {"hyperparameters": self._actual_params, **other_params}
+
+    def _get_other_savable_params(self):
+        return {}
 
     def fix_savable_params(self, params):
-        raise NotImplementedError
+        return {}, []
 
 
 class ClassicalProcessing:
@@ -95,7 +101,33 @@ class QuantumProcessing:
 
 
 class ClassicalModel(Model):
-    pass
+    _model_template = None
+
+    def set_seed(self):
+        self._actual_params["random_state"] = self._qsa.seed
+
+    def train(self, test=False):
+        if test:
+            train = np.concatenate(
+                [self._qsa.df["train"]["data"], self._qsa.df["dev"]["data"]],
+                axis=0,
+            )
+            labels = np.concatenate(
+                [self._qsa.df["train"]["labels"], self._qsa.df["dev"]["labels"]],
+                axis=0,
+            )
+        else:
+            train = self._qsa.df["train"]["data"]
+            labels = self._qsa.df["train"]["labels"]
+        self._ml = self._model_template(**self._actual_params)
+        self._ml.fit(train, labels)
+
+    def predict(self, test=False):
+        if test:
+            data = self._qsa.df["test"]["data"]
+        else:
+            data = self._qsa.df["dev"]["data"]
+        self.y_pred = self._ml.predict_proba(data)[:, 1]
 
 
 class QuantumModel(Model):
@@ -174,10 +206,9 @@ class XGBoost(ClassicalModel, ClassicalProcessing):
             dtest, iteration_range=(0, self._ml.best_iteration)
         )
 
-    def get_savable_params(self):
+    def _get_other_savable_params(self):
         return {
             "best_iteration": self._ml.best_iteration,
-            "hyperparameters": self._actual_params,
         }
 
     def fix_savable_params(self, params):
@@ -188,4 +219,33 @@ class XGBoost(ClassicalModel, ClassicalProcessing):
         return params_normalized, ["best_iteration"]
 
 
-models_template = [XGBoost]
+class RandomForest(ClassicalModel, ClassicalProcessing):
+    name = "RandomForest"
+    _hyperparameters = {
+        "n_estimators": [100, 500, 100],
+        "split_criterion": ["gini", "entropy"],
+        "max_depth": [6, 12, 24],
+        "min_samples_split": [2, 4, 8],
+        "min_samples_leaf": [1, 2, 4],
+    }
+    _default_params = {
+        "n_streams": 1,
+    }
+    _model_template = cuRFC
+
+
+class SVC(ClassicalModel, ClassicalProcessing):
+    name = "SVC"
+    _hyperparameters = {
+        "C": [0.1, 1, 5, 10],
+        "kernel": ["linear", "poly", "rbf", "sigmoid"],
+        "gamma": ["scale", "auto"],
+    }
+    _default_params = {
+        "probability": True,
+    }
+
+    _model_template = skSVC
+
+
+models_template = [SVC, RandomForest, XGBoost]
