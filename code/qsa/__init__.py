@@ -35,6 +35,7 @@ class QSA(Utils):
                 self._model_pipeline(test=True)
 
     def _model_pipeline(self, test=False):
+        self._set_seeds()
         self._model.set_seed()
         self._model.process_data(test=test)
         self._model.train(test=test)

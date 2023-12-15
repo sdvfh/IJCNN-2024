@@ -1,6 +1,7 @@
 import json
 from itertools import product
 
+import keras_nlp
 import numpy as np
 import pandas as pd
 import xgboost as xgb
@@ -134,7 +135,7 @@ class QuantumModel(Model):
     pass
 
 
-class XGBoost(ClassicalModel, ClassicalProcessing):
+class XGBoost(Model, ClassicalProcessing):
     name = "XGBoost"
     _hyperparameters = {
         "max_depth": [6, 12, 24],
@@ -248,4 +249,24 @@ class SVC(ClassicalModel, ClassicalProcessing):
     _model_template = skSVC
 
 
-models_template = [SVC, RandomForest, XGBoost]
+class BERT(Model, ClassicalProcessing):
+    name = "BERT"
+    _hyperparameters = {
+        "epochs": [1],
+        "batch_size": [2],
+    }
+
+    def train(self, test=False):
+        self._ml = keras_nlp.models.BertClassifier.from_preset(
+            "bert_tiny_en_uncased_sst2", num_classes=2, activation="softmax"
+        )
+
+    def predict(self, test=False):
+        if test:
+            data = self._qsa.df["test"]["sentences"]
+        else:
+            data = self._qsa.df["dev"]["sentences"]
+        self.y_pred = self._ml.predict(data)[:, 1]
+
+
+models_template = [BERT]

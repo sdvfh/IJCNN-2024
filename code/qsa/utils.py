@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import tensorflow as tf
 from scikitplot.helpers import binary_ks_curve
 from sklearn.metrics import (
     balanced_accuracy_score,
@@ -22,12 +23,17 @@ class Utils:
         self._model = None
         self.path = None
         self.df = None
-        self.seed = None
+        self.seed = 42
         self._get_path()
+        self._set_seeds()
 
     def _get_path(self):
         self.path = {"root": Path(__file__).parent.parent.parent.absolute()}
         self.path["data"] = self.path["root"] / "data"
+
+    def _set_seeds(self):
+        tf.keras.utils.set_random_seed(self.seed)
+        tf.config.experimental.enable_op_determinism()
 
     @staticmethod
     def save_np(path, array):

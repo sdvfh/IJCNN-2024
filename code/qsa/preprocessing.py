@@ -52,7 +52,7 @@ class Preprocessing(Utils):
                 output = model(tokens)["pooled_output"].numpy()
                 self.save_np(path_output / f"{i}.npy", output)
                 with open(path_output / "dataset_type_labels.txt", "a+") as f:
-                    f.write(f"{i},{label},{original_label}")
+                    f.write(f"{i}\t{label}\t{original_label}\t{sentence}")
                     f.write("\n")
 
     def _compress_data(self):
@@ -62,7 +62,8 @@ class Preprocessing(Utils):
             dataset_labels = pd.read_csv(
                 path_output / "dataset_type_labels.txt",
                 header=None,
-                names=["id", "label", "original_label"],
+                names=["id", "label", "original_label", "sentence"],
+                sep="\t",
             )
             dataset_labels["type"] = dataset_type
             labels.append(dataset_labels)
@@ -92,14 +93,17 @@ class Preprocessing(Utils):
             "train": {
                 "data": train,
                 "labels": labels[labels["type"] == "train"]["label"].values,
+                "sentences": labels[labels["type"] == "train"]["sentence"].values,
             },
             "dev": {
                 "data": dev,
                 "labels": labels[labels["type"] == "dev"]["label"].values,
+                "sentences": labels[labels["type"] == "dev"]["sentence"].values,
             },
             "test": {
                 "data": test,
                 "labels": labels[labels["type"] == "test"]["label"].values,
+                "sentences": labels[labels["type"] == "test"]["sentence"].values,
             },
         }
         return df
