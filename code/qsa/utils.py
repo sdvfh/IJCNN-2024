@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-import numpy as np
 import tensorflow as tf
+from pennylane import numpy as np
 from scikitplot.helpers import binary_ks_curve
 from sklearn.metrics import (
     balanced_accuracy_score,
@@ -62,9 +62,9 @@ class Utils:
             "recall": recall_score(y_true, y_pred_round),
             "f1": f1_score(y_true, y_pred_round),
             "kappa": cohen_kappa_score(y_true, y_pred_round),
-            "roc_auc": roc_auc_score(y_true, y_pred),
+            # "roc_auc": roc_auc_score(y_true, y_pred),
         }
-        _, _, _, metric["ks"], metric["threshold"], _ = binary_ks_curve(y_true, y_pred)
+        # _, _, _, metric["ks"], metric["threshold"], _ = binary_ks_curve(y_true, y_pred)
         return metric
 
     def save_results(self, test=False):
@@ -80,6 +80,7 @@ class Utils:
             "metrics": metrics,
             "model_params": params_to_save,
             "training_type": flag,
+            "time_training": self._model.time_training,
         }
 
         model_result_path = (

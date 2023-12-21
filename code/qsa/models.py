@@ -2,10 +2,13 @@ import json
 from itertools import product
 
 import keras_nlp
-import numpy as np
 import pandas as pd
+import pennylane as qml
 import xgboost as xgb
 from cuml.ensemble import RandomForestClassifier as cuRFC
+from pennylane import numpy as np
+from pennylane.optimize import AdamOptimizer
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.svm import SVC as skSVC
 
 
@@ -17,6 +20,7 @@ class Model:
     def __init__(self, qsa):
         self._qsa = qsa
         self._actual_params = {}
+        self.time_training = None
         self.combination_idx = None
         self._ml = None
         self.y_pred = None
@@ -91,14 +95,33 @@ class Model:
         return {}, []
 
 
-class ClassicalProcessing:
+class Processing:
+    def __init__(self):
+        self._qsa = None
+
+    def process_data(self, test=False):
+        raise NotImplementedError
+
+
+class ClassicalProcessing(Processing):
     def process_data(self, test=False):
         pass
 
 
-class QuantumProcessing:
+class QuantumProcessing(Processing):
     def process_data(self, test=False):
-        pass
+        scaler = MinMaxScaler(feature_range=(0, np.pi))
+        self._qsa.df["train"]["data_transformed"] = scaler.fit_transform(
+            self._qsa.df["train"]["data"]
+        )
+        if test:
+            self._qsa.df["test"]["data_transformed"] = scaler.transform(
+                self._qsa.df["test"]["data"]
+            )
+        else:
+            self._qsa.df["dev"]["data_transformed"] = scaler.transform(
+                self._qsa.df["dev"]["data"]
+            )
 
 
 class ClassicalModel(Model):
@@ -132,7 +155,221 @@ class ClassicalModel(Model):
 
 
 class QuantumModel(Model):
-    pass
+    _hyperparameters = {
+        "n_layers": [1, 4, 8, 16],
+    }
+
+    def __init__(self, qsa):
+        super().__init__(qsa)
+        self._num_qubits = 10
+
+    def set_seed(self):
+        self._actual_params["seed"] = self._qsa.seed
+
+    def train(self, test=False):
+        dev = qml.device("lightning.gpu", wires=self._num_qubits)
+
+        def log_loss(labels, predictions):
+            epsilon = (
+                1e-15  # Small value to prevent logarithm from approaching infinity
+            )
+
+            loss = 0
+            for label, prediction in zip(labels, predictions, strict=True):
+                prediction = np.clip(
+                    prediction, epsilon, 1 - epsilon
+                )  # Clip probabilities to avoid log(0) or log(1)
+                loss = loss - (
+                    label * np.log(prediction) + (1 - label) * np.log(1 - prediction)
+                )
+
+            loss = loss / len(labels)
+            return loss
+
+        def cost(weights, bias, X, Y):
+            predictions = [variational_classifier(weights, bias, x) for x in X]
+            return log_loss(Y, predictions)
+
+        def accuracy(labels, predictions):
+            loss = 0
+            for label, prediction in zip(labels, predictions, strict=True):
+                if abs(label - prediction) < 1e-5:
+                    loss = loss + 1
+            loss = loss / len(labels)
+
+            return loss
+
+        @qml.qnode(dev)
+        def circuit(weights, features):
+            qml.AmplitudeEmbedding(
+                features=features,
+                wires=range(self._num_qubits),
+                normalize=True,
+                pad_with=0,
+            )
+            # n_selected_features = 2 ** self._num_qubits
+            # for i in range(0, len(features), n_selected_features):
+            #     selected_features = features[i: i + n_selected_features]
+            #     selected_features = qml.AmplitudeEmbedding._preprocess(
+            #         features=selected_features,
+            #         wires=range(self._num_qubits),
+            #         normalize=True,
+            #         pad_with=0
+            #     )
+            #     qml.MottonenStatePreparation(state_vector=selected_features, wires=range(self._num_qubits))
+
+            self._layer(weights, wires=range(self._num_qubits))
+
+            return qml.expval(qml.PauliZ(0))
+
+        def variational_classifier(weights, bias, feature):
+            return circuit(weights, feature) + bias
+
+        def transform_y(old_y):
+            new_y = np.array(old_y) * 2 - np.ones(len(old_y))
+            new_y = np.array(new_y, requires_grad=False)
+            return new_y
+
+        opt = AdamOptimizer(0.01, beta1=0.9, beta2=0.999)
+        weights_init = self._get_initial_weights()
+        bias_init = np.array(0.0, requires_grad=True)
+
+        best_acc_dev = 0.0
+        patience = 20
+        no_improvement_count = 0
+
+        weights = weights_init.copy()
+        bias = bias_init.copy()
+        # best_weights = weights.copy()
+        # best_bias = bias.copy()
+
+        x_train = np.array(
+            self._qsa.df["train"]["data_transformed"], requires_grad=False
+        )
+        y_train = transform_y(self._qsa.df["train"]["labels"])
+        if test:
+            x_dev = np.array(
+                self._qsa.df["test"]["data_transformed"], requires_grad=False
+            )
+            y_dev = transform_y(self._qsa.df["test"]["labels"])
+
+            x_train = np.concatenate(
+                [x_train, self._qsa.df["dev"]["data_transformed"]], axis=0
+            )
+            y_train = np.concatenate(
+                [y_train, transform_y(self._qsa.df["dev"]["labels"])], axis=0
+            )
+        else:
+            x_dev = np.array(
+                self._qsa.df["dev"]["data_transformed"], requires_grad=False
+            )
+            y_dev = transform_y(self._qsa.df["dev"]["labels"])
+
+        # x_train = x_train[:10]
+        # y_train = y_train[:10]
+        # x_dev = x_dev[:10]
+        # y_dev = y_dev[:10]
+        batch_size = len(x_train)
+
+        for it in range(1000):
+            batch_index = np.random.randint(0, len(x_train), (batch_size,))
+            feats_train_batch = x_train[batch_index]
+            Y_train_batch = y_train[batch_index]
+            weights, bias, _, _ = opt.step(
+                cost, weights, bias, feats_train_batch, Y_train_batch
+            )
+
+            predictions_train = [
+                np.sign(variational_classifier(weights, bias, f)) for f in x_train
+            ]
+            predictions_dev = [
+                np.sign(variational_classifier(weights, bias, f)) for f in x_dev
+            ]
+
+            acc_train = accuracy(y_train, predictions_train)
+            acc_dev = accuracy(y_dev, predictions_dev)
+            # acc_test = accuracy(y_test, predictions_test)
+            final_cost = cost(weights, bias, x_train, y_train)
+            print(
+                "Iter: {:5d} | Cost: {:0.7f} | Acc train: {:0.7f} | Acc dev: {:0.7f} "
+                "".format(it + 1, final_cost, acc_train, acc_dev)
+            )
+
+            if acc_dev > best_acc_dev:
+                best_acc_dev = acc_dev
+                # best_weights = weights.copy()
+                # best_bias = bias.copy()
+                no_improvement_count = 0
+            else:
+                no_improvement_count += 1
+
+                # Check early stopping condition
+            if no_improvement_count >= patience:
+                print(
+                    "Early stopping! No improvement for {} consecutive iterations.".format(
+                        patience
+                    )
+                )
+                break
+
+        self.y_pred = [np.sign(variational_classifier(weights, bias, x)) for x in x_dev]
+        self.y_pred = np.array(self.y_pred).copy()
+        self.y_pred[self.y_pred == -1] = 0
+
+    def _layer(self, weights, wires):
+        pass
+
+    def _get_initial_weights(self):
+        pass
+
+    def predict(self, test=False):
+        pass
+
+
+class QuantumAnsatz14(QuantumModel, QuantumProcessing):
+    name = "QuantumAnsatz14"
+
+    def _layer(self, weights, wires):
+        for layer in range(self._actual_params["n_layers"]):
+            qml.RY(weights[layer][0], wires=wires[0])
+            qml.RY(weights[layer][1], wires=wires[1])
+            qml.RY(weights[layer][2], wires=wires[2])
+            qml.RY(weights[layer][3], wires=wires[3])
+            qml.ctrl(qml.RX, (3,), control_values=True)(weights[layer][4], wires=0)
+            qml.ctrl(qml.RX, (2,), control_values=True)(weights[layer][5], wires=3)
+            qml.ctrl(qml.RX, (1,), control_values=True)(weights[layer][6], wires=2)
+            qml.ctrl(qml.RX, (0,), control_values=True)(weights[layer][7], wires=1)
+            qml.RY(weights[layer][8], wires=wires[0])
+            qml.RY(weights[layer][9], wires=wires[1])
+            qml.RY(weights[layer][10], wires=wires[2])
+            qml.RY(weights[layer][11], wires=wires[3])
+            qml.ctrl(qml.RX, (3,), control_values=True)(weights[layer][12], wires=2)
+            qml.ctrl(qml.RX, (0,), control_values=True)(weights[layer][13], wires=3)
+            qml.ctrl(qml.RX, (1,), control_values=True)(weights[layer][14], wires=0)
+            qml.ctrl(qml.RX, (2,), control_values=True)(weights[layer][15], wires=1)
+
+    def _get_initial_weights(self):
+        return (
+            np.pi
+            / 2
+            * np.random.randn(self._actual_params["n_layers"], 16, requires_grad=True)
+        )
+
+
+class StrongAnsatz(QuantumModel, QuantumProcessing):
+    name = "StrongAnsatz"
+
+    def _layer(self, weights, wires):
+        qml.StronglyEntanglingLayers(weights, wires=wires)
+
+    def _get_initial_weights(self):
+        return (
+            np.pi
+            / 2
+            * np.random.randn(
+                self._actual_params["n_layers"], self._num_qubits, 3, requires_grad=True
+            )
+        )
 
 
 class XGBoost(Model, ClassicalProcessing):
@@ -269,4 +506,4 @@ class BERT(Model, ClassicalProcessing):
         self.y_pred = self._ml.predict(data)[:, 1]
 
 
-models_template = [BERT]
+models_template = [StrongAnsatz]

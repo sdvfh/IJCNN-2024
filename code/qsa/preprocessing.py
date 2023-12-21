@@ -1,6 +1,6 @@
 import keras_nlp
-import numpy as np
 import pandas as pd
+from pennylane import numpy as np
 from pytreebank import load_sst
 
 from .utils import Utils
@@ -23,7 +23,7 @@ class Preprocessing(Utils):
         df = load_sst(self.path["data"])
 
         preprocessor = keras_nlp.models.BertPreprocessor.from_preset(
-            "bert_base_en_uncased", sequence_length=180
+            "bert_tiny_en_uncased_sst2", sequence_length=180
         )
         model = keras_nlp.models.BertBackbone.from_preset("bert_base_en_uncased")
 
