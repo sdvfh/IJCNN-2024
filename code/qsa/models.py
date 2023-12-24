@@ -5,9 +5,11 @@ import keras_nlp
 import pandas as pd
 import pennylane as qml
 import xgboost as xgb
+from cuml import PCA
 from cuml.ensemble import RandomForestClassifier as cuRFC
 from pennylane import numpy as np
 from pennylane.optimize import AdamOptimizer
+from sklearn.metrics import accuracy_score
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.svm import SVC as skSVC
 
@@ -100,16 +102,6 @@ class Processing:
         self._qsa = None
 
     def process_data(self, test=False):
-        raise NotImplementedError
-
-
-class ClassicalProcessing(Processing):
-    def process_data(self, test=False):
-        pass
-
-
-class QuantumProcessing(Processing):
-    def process_data(self, test=False):
         scaler = MinMaxScaler(feature_range=(0, np.pi))
         self._qsa.df["train"]["data_transformed"] = scaler.fit_transform(
             self._qsa.df["train"]["data"]
@@ -122,6 +114,27 @@ class QuantumProcessing(Processing):
             self._qsa.df["dev"]["data_transformed"] = scaler.transform(
                 self._qsa.df["dev"]["data"]
             )
+
+        pca = PCA(n_components=16)
+        self._qsa.df["train"]["data_transformed"] = pca.fit_transform(
+            self._qsa.df["train"]["data_transformed"]
+        )
+        if test:
+            self._qsa.df["test"]["data_transformed"] = pca.transform(
+                self._qsa.df["test"]["data_transformed"]
+            )
+        else:
+            self._qsa.df["dev"]["data_transformed"] = pca.transform(
+                self._qsa.df["dev"]["data_transformed"]
+            )
+
+
+class ClassicalProcessing(Processing):
+    pass
+
+
+class QuantumProcessing(Processing):
+    pass
 
 
 class ClassicalModel(Model):
@@ -161,43 +174,23 @@ class QuantumModel(Model):
 
     def __init__(self, qsa):
         super().__init__(qsa)
-        self._num_qubits = 10
+        self._num_qubits = 4
 
     def set_seed(self):
         self._actual_params["seed"] = self._qsa.seed
 
     def train(self, test=False):
-        dev = qml.device("lightning.gpu", wires=self._num_qubits)
+        dev = qml.device("default.qubit", wires=self._num_qubits)
 
-        def log_loss(labels, predictions):
-            epsilon = (
-                1e-15  # Small value to prevent logarithm from approaching infinity
-            )
-
-            loss = 0
-            for label, prediction in zip(labels, predictions, strict=True):
-                prediction = np.clip(
-                    prediction, epsilon, 1 - epsilon
-                )  # Clip probabilities to avoid log(0) or log(1)
-                loss = loss - (
-                    label * np.log(prediction) + (1 - label) * np.log(1 - prediction)
-                )
-
-            loss = loss / len(labels)
-            return loss
+        def square_loss(labels, predictions):
+            return np.mean((labels - predictions) ** 2)
 
         def cost(weights, bias, X, Y):
-            predictions = [variational_classifier(weights, bias, x) for x in X]
-            return log_loss(Y, predictions)
+            predictions = variational_classifier(weights, bias, X)
+            return square_loss(Y, predictions)
 
-        def accuracy(labels, predictions):
-            loss = 0
-            for label, prediction in zip(labels, predictions, strict=True):
-                if abs(label - prediction) < 1e-5:
-                    loss = loss + 1
-            loss = loss / len(labels)
-
-            return loss
+        def cost_from_predictions(predictions, Y):
+            return square_loss(Y, predictions)
 
         @qml.qnode(dev)
         def circuit(weights, features):
@@ -230,7 +223,7 @@ class QuantumModel(Model):
             new_y = np.array(new_y, requires_grad=False)
             return new_y
 
-        opt = AdamOptimizer(0.01, beta1=0.9, beta2=0.999)
+        opt = AdamOptimizer()
         weights_init = self._get_initial_weights()
         bias_init = np.array(0.0, requires_grad=True)
 
@@ -269,7 +262,9 @@ class QuantumModel(Model):
         # y_train = y_train[:10]
         # x_dev = x_dev[:10]
         # y_dev = y_dev[:10]
+
         batch_size = len(x_train)
+        # batch_size = 500
 
         for it in range(1000):
             batch_index = np.random.randint(0, len(x_train), (batch_size,))
@@ -279,17 +274,15 @@ class QuantumModel(Model):
                 cost, weights, bias, feats_train_batch, Y_train_batch
             )
 
-            predictions_train = [
-                np.sign(variational_classifier(weights, bias, f)) for f in x_train
-            ]
-            predictions_dev = [
-                np.sign(variational_classifier(weights, bias, f)) for f in x_dev
-            ]
+            results_train = variational_classifier(weights, bias, x_train)
+            results_dev = variational_classifier(weights, bias, x_dev)
+            predictions_train = np.sign(results_train)
+            predictions_dev = np.sign(results_dev)
 
-            acc_train = accuracy(y_train, predictions_train)
-            acc_dev = accuracy(y_dev, predictions_dev)
+            acc_train = accuracy_score(y_train, predictions_train)
+            acc_dev = accuracy_score(y_dev, predictions_dev)
             # acc_test = accuracy(y_test, predictions_test)
-            final_cost = cost(weights, bias, x_train, y_train)
+            final_cost = cost_from_predictions(results_train, y_train)
             print(
                 "Iter: {:5d} | Cost: {:0.7f} | Acc train: {:0.7f} | Acc dev: {:0.7f} "
                 "".format(it + 1, final_cost, acc_train, acc_dev)
@@ -391,7 +384,10 @@ class XGBoost(Model, ClassicalProcessing):
     def train(self, test=False):
         if test:
             data = np.concatenate(
-                [self._qsa.df["train"]["data"], self._qsa.df["dev"]["data"]],
+                [
+                    self._qsa.df["train"]["data_transformed"],
+                    self._qsa.df["dev"]["data_transformed"],
+                ],
                 axis=0,
             )
             labels = np.concatenate(
@@ -399,14 +395,15 @@ class XGBoost(Model, ClassicalProcessing):
                 axis=0,
             )
             dtrain = xgb.DMatrix(data, label=labels)
-            dtest = xgb.DMatrix(self._qsa.df["test"]["data"])
+            dtest = xgb.DMatrix(self._qsa.df["test"]["data_transformed"])
         else:
             dtrain = xgb.DMatrix(
-                self._qsa.df["train"]["data"],
+                self._qsa.df["train"]["data_transformed"],
                 label=self._qsa.df["train"]["labels"],
             )
             dtest = xgb.DMatrix(
-                self._qsa.df["dev"]["data"], label=self._qsa.df["dev"]["labels"]
+                self._qsa.df["dev"]["data_transformed"],
+                label=self._qsa.df["dev"]["labels"],
             )
 
         if test:
@@ -437,9 +434,9 @@ class XGBoost(Model, ClassicalProcessing):
 
     def predict(self, test=False):
         if test:
-            dtest = xgb.DMatrix(self._qsa.df["test"]["data"])
+            dtest = xgb.DMatrix(self._qsa.df["test"]["data_transformed"])
         else:
-            dtest = xgb.DMatrix(self._qsa.df["dev"]["data"])
+            dtest = xgb.DMatrix(self._qsa.df["dev"]["data_transformed"])
         self.y_pred = self._ml.predict(
             dtest, iteration_range=(0, self._ml.best_iteration)
         )
@@ -506,4 +503,4 @@ class BERT(Model, ClassicalProcessing):
         self.y_pred = self._ml.predict(data)[:, 1]
 
 
-models_template = [StrongAnsatz]
+models_template = [QuantumAnsatz14]
