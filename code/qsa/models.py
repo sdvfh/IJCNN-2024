@@ -524,4 +524,5 @@ models_template = [
     BERT,
     QuantumAnsatz6,
     QuantumAnsatz6Modified,
+    StrongAnsatz,
 ]
