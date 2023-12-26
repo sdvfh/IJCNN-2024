@@ -1,0 +1,20 @@
+name: IJCNN-2024
+channels:
+  - conda-forge
+  - rapidsai
+  - nvidia
+dependencies:
+  - python=3.10.13
+  - cudatoolkit=11.8.0
+  - cudnn=8.8.0
+  - cuml=23.12
+  - pip=23.3.1
+  - pennylane=0.33.1
+  - pandas=1.5.3
+  - keras=2.15
+  - pip:
+      - pytreebank==0.2.7
+      - keras-nlp==0.6.4
+      - scikit-plot==0.3.7
+      - xgboost==2.0.2
+      - tensorflow[and-cuda]==2.15.0.post1
