@@ -5,12 +5,10 @@ import keras_nlp
 import pandas as pd
 import pennylane as qml
 import xgboost as xgb
-from cuml import PCA
 from cuml.ensemble import RandomForestClassifier as cuRFC
 from pennylane import numpy as np
 from pennylane.optimize import AdamOptimizer
 from sklearn.metrics import accuracy_score
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.svm import SVC as skSVC
 
 
@@ -28,10 +26,8 @@ class Model:
         self.y_pred = None
 
     def get_combinations(self):
-        # Get all combinations of hyperparameters
         param_combinations = list(product(*self._hyperparameters.values()))
 
-        # Create a list of dictionaries for each combination
         param_dicts = [
             dict(zip(self._hyperparameters.keys(), combination, strict=False))
             for combination in param_combinations
@@ -102,31 +98,11 @@ class Processing:
         self._qsa = None
 
     def process_data(self, test=False):
-        scaler = MinMaxScaler(feature_range=(0, np.pi))
-        self._qsa.df["train"]["data_transformed"] = scaler.fit_transform(
-            self._qsa.df["train"]["data"]
-        )
+        self._qsa.df["train"]["data_transformed"] = self._qsa.df["train"]["data"]
         if test:
-            self._qsa.df["test"]["data_transformed"] = scaler.transform(
-                self._qsa.df["test"]["data"]
-            )
+            self._qsa.df["test"]["data_transformed"] = self._qsa.df["test"]["data"]
         else:
-            self._qsa.df["dev"]["data_transformed"] = scaler.transform(
-                self._qsa.df["dev"]["data"]
-            )
-
-        pca = PCA(n_components=16)
-        self._qsa.df["train"]["data_transformed"] = pca.fit_transform(
-            self._qsa.df["train"]["data_transformed"]
-        )
-        if test:
-            self._qsa.df["test"]["data_transformed"] = pca.transform(
-                self._qsa.df["test"]["data_transformed"]
-            )
-        else:
-            self._qsa.df["dev"]["data_transformed"] = pca.transform(
-                self._qsa.df["dev"]["data_transformed"]
-            )
+            self._qsa.df["dev"]["data_transformed"] = self._qsa.df["dev"]["data"]
 
 
 class ClassicalProcessing(Processing):
@@ -174,7 +150,7 @@ class QuantumModel(Model):
 
     def __init__(self, qsa):
         super().__init__(qsa)
-        self._num_qubits = 4
+        self._num_qubits = 10
 
     def set_seed(self):
         self._actual_params["seed"] = self._qsa.seed
@@ -200,16 +176,6 @@ class QuantumModel(Model):
                 normalize=True,
                 pad_with=0,
             )
-            # n_selected_features = 2 ** self._num_qubits
-            # for i in range(0, len(features), n_selected_features):
-            #     selected_features = features[i: i + n_selected_features]
-            #     selected_features = qml.AmplitudeEmbedding._preprocess(
-            #         features=selected_features,
-            #         wires=range(self._num_qubits),
-            #         normalize=True,
-            #         pad_with=0
-            #     )
-            #     qml.MottonenStatePreparation(state_vector=selected_features, wires=range(self._num_qubits))
 
             self._layer(weights, wires=range(self._num_qubits))
 
@@ -230,11 +196,12 @@ class QuantumModel(Model):
         best_acc_dev = 0.0
         patience = 20
         no_improvement_count = 0
+        it = 0
 
         weights = weights_init.copy()
         bias = bias_init.copy()
-        # best_weights = weights.copy()
-        # best_bias = bias.copy()
+        best_weights = weights.copy()
+        best_bias = bias.copy()
 
         x_train = np.array(
             self._qsa.df["train"]["data_transformed"], requires_grad=False
@@ -247,10 +214,10 @@ class QuantumModel(Model):
             y_dev = transform_y(self._qsa.df["test"]["labels"])
 
             x_train = np.concatenate(
-                [x_train, self._qsa.df["dev"]["data_transformed"]], axis=0
+                [x_train, self._qsa.df["test"]["data_transformed"]], axis=0
             )
             y_train = np.concatenate(
-                [y_train, transform_y(self._qsa.df["dev"]["labels"])], axis=0
+                [y_train, transform_y(self._qsa.df["test"]["labels"])], axis=0
             )
         else:
             x_dev = np.array(
@@ -258,56 +225,80 @@ class QuantumModel(Model):
             )
             y_dev = transform_y(self._qsa.df["dev"]["labels"])
 
-        # x_train = x_train[:10]
-        # y_train = y_train[:10]
-        # x_dev = x_dev[:10]
-        # y_dev = y_dev[:10]
+        if test:
+            for it in range(int(self._actual_params["best_iteration"])):
+                weights, bias, _, _ = opt.step(cost, weights, bias, x_train, y_train)
+                results_train = variational_classifier(weights, bias, x_train)
+                results_dev = variational_classifier(weights, bias, x_dev)
+                predictions_train = np.sign(results_train)
+                predictions_dev = np.sign(results_dev)
 
-        batch_size = len(x_train)
-        # batch_size = 500
-
-        for it in range(1000):
-            batch_index = np.random.randint(0, len(x_train), (batch_size,))
-            feats_train_batch = x_train[batch_index]
-            Y_train_batch = y_train[batch_index]
-            weights, bias, _, _ = opt.step(
-                cost, weights, bias, feats_train_batch, Y_train_batch
-            )
-
-            results_train = variational_classifier(weights, bias, x_train)
-            results_dev = variational_classifier(weights, bias, x_dev)
-            predictions_train = np.sign(results_train)
-            predictions_dev = np.sign(results_dev)
-
-            acc_train = accuracy_score(y_train, predictions_train)
-            acc_dev = accuracy_score(y_dev, predictions_dev)
-            # acc_test = accuracy(y_test, predictions_test)
-            final_cost = cost_from_predictions(results_train, y_train)
-            print(
-                "Iter: {:5d} | Cost: {:0.7f} | Acc train: {:0.7f} | Acc dev: {:0.7f} "
-                "".format(it + 1, final_cost, acc_train, acc_dev)
-            )
-
-            if acc_dev > best_acc_dev:
-                best_acc_dev = acc_dev
-                # best_weights = weights.copy()
-                # best_bias = bias.copy()
-                no_improvement_count = 0
-            else:
-                no_improvement_count += 1
-
-                # Check early stopping condition
-            if no_improvement_count >= patience:
+                acc_train = accuracy_score(y_train, predictions_train)
+                acc_dev = accuracy_score(y_dev, predictions_dev)
+                final_cost = cost_from_predictions(results_train, y_train)
                 print(
-                    "Early stopping! No improvement for {} consecutive iterations.".format(
-                        patience
-                    )
+                    "Iter: {:5d} | Cost: {:0.7f} | Acc train: {:0.7f} | Acc dev: {:0.7f} "
+                    "".format(it + 1, final_cost, acc_train, acc_dev)
                 )
-                break
 
-        self.y_pred = [np.sign(variational_classifier(weights, bias, x)) for x in x_dev]
-        self.y_pred = np.array(self.y_pred).copy()
-        self.y_pred[self.y_pred == -1] = 0
+            self._ml = {"weights": weights, "bias": bias, "best_iteration": it}
+
+            self.y_pred = np.sign(variational_classifier(weights, bias, x_dev))
+            self.y_pred = np.array(self.y_pred).copy()
+            self.y_pred[self.y_pred == -1] = 0
+        else:
+            for it in range(1_000_000):
+                weights, bias, _, _ = opt.step(cost, weights, bias, x_train, y_train)
+
+                results_train = variational_classifier(weights, bias, x_train)
+                results_dev = variational_classifier(weights, bias, x_dev)
+                predictions_train = np.sign(results_train)
+                predictions_dev = np.sign(results_dev)
+
+                acc_train = accuracy_score(y_train, predictions_train)
+                acc_dev = accuracy_score(y_dev, predictions_dev)
+                final_cost = cost_from_predictions(results_train, y_train)
+                print(
+                    "Iter: {:5d} | Cost: {:0.7f} | Acc train: {:0.7f} | Acc dev: {:0.7f} "
+                    "".format(it + 1, final_cost, acc_train, acc_dev)
+                )
+
+                if acc_dev > best_acc_dev:
+                    best_acc_dev = acc_dev
+                    best_weights = weights.copy()
+                    best_bias = bias.copy()
+                    no_improvement_count = 0
+                else:
+                    no_improvement_count += 1
+
+                if no_improvement_count >= patience:
+                    print(
+                        "Early stopping! No improvement for {} consecutive iterations.".format(
+                            patience
+                        )
+                    )
+                    break
+
+            self._ml = {
+                "weights": best_weights,
+                "bias": best_bias,
+                "best_iteration": it + 1,
+            }
+
+            self.y_pred = np.sign(
+                variational_classifier(best_weights, best_bias, x_dev)
+            )
+            self.y_pred = np.array(self.y_pred).copy()
+            self.y_pred[self.y_pred == -1] = 0
+
+    def _get_other_savable_params(self):
+        return {"best_iteration": self._ml["best_iteration"]}
+
+    def fix_savable_params(self, params):
+        params_normalized = {
+            "best_iteration": params["best_iteration"],
+        }
+        return params_normalized, ["best_iteration"]
 
     def _layer(self, weights, wires):
         pass
@@ -319,34 +310,58 @@ class QuantumModel(Model):
         pass
 
 
-class QuantumAnsatz14(QuantumModel, QuantumProcessing):
-    name = "QuantumAnsatz14"
+class QuantumAnsatz6Template(QuantumModel, QuantumProcessing):
+    name = "QuantumAnsatz6Template"
+    _controlled_gate = None
+    _gate = None
 
     def _layer(self, weights, wires):
         for layer in range(self._actual_params["n_layers"]):
-            qml.RY(weights[layer][0], wires=wires[0])
-            qml.RY(weights[layer][1], wires=wires[1])
-            qml.RY(weights[layer][2], wires=wires[2])
-            qml.RY(weights[layer][3], wires=wires[3])
-            qml.ctrl(qml.RX, (3,), control_values=True)(weights[layer][4], wires=0)
-            qml.ctrl(qml.RX, (2,), control_values=True)(weights[layer][5], wires=3)
-            qml.ctrl(qml.RX, (1,), control_values=True)(weights[layer][6], wires=2)
-            qml.ctrl(qml.RX, (0,), control_values=True)(weights[layer][7], wires=1)
-            qml.RY(weights[layer][8], wires=wires[0])
-            qml.RY(weights[layer][9], wires=wires[1])
-            qml.RY(weights[layer][10], wires=wires[2])
-            qml.RY(weights[layer][11], wires=wires[3])
-            qml.ctrl(qml.RX, (3,), control_values=True)(weights[layer][12], wires=2)
-            qml.ctrl(qml.RX, (0,), control_values=True)(weights[layer][13], wires=3)
-            qml.ctrl(qml.RX, (1,), control_values=True)(weights[layer][14], wires=0)
-            qml.ctrl(qml.RX, (2,), control_values=True)(weights[layer][15], wires=1)
+            i = 0
+            for o in range(self._num_qubits):
+                self._gate(weights[layer, i], wires=o)
+                i += 1
+            for o in range(self._num_qubits):
+                qml.RZ(weights[layer, i], wires=o)
+                i += 1
+
+            for ctrl_qubit in range(self._num_qubits):
+                for target_qubit in range(self._num_qubits):
+                    if ctrl_qubit == target_qubit:
+                        continue
+                    self._controlled_gate(
+                        weights[layer, i],
+                        wires=(
+                            self._num_qubits - 1 - ctrl_qubit,
+                            self._num_qubits - 1 - target_qubit,
+                        ),
+                    )
+                    i += 1
+            for o in range(self._num_qubits):
+                self._gate(weights[layer, i], wires=o)
+                i += 1
+            for o in range(self._num_qubits):
+                qml.RZ(weights[layer, i], wires=o)
+                i += 1
 
     def _get_initial_weights(self):
         return (
             np.pi
             / 2
-            * np.random.randn(self._actual_params["n_layers"], 16, requires_grad=True)
+            * np.random.randn(self._actual_params["n_layers"], 130, requires_grad=True)
         )
+
+
+class QuantumAnsatz6(QuantumAnsatz6Template):
+    name = "QuantumAnsatz6"
+    _controlled_gate = qml.CRX
+    _gate = qml.RX
+
+
+class QuantumAnsatz6Modified(QuantumAnsatz6Template):
+    name = "QuantumAnsatz6Modified"
+    _controlled_gate = qml.CRY
+    _gate = qml.RY
 
 
 class StrongAnsatz(QuantumModel, QuantumProcessing):
@@ -449,7 +464,6 @@ class XGBoost(Model, ClassicalProcessing):
     def fix_savable_params(self, params):
         params_normalized = {
             "best_iteration": params["best_iteration"],
-            # **params["hyperparameters"]
         }
         return params_normalized, ["best_iteration"]
 
@@ -503,4 +517,11 @@ class BERT(Model, ClassicalProcessing):
         self.y_pred = self._ml.predict(data)[:, 1]
 
 
-models_template = [QuantumAnsatz14]
+models_template = [
+    XGBoost,
+    RandomForest,
+    SVC,
+    BERT,
+    QuantumAnsatz6,
+    QuantumAnsatz6Modified,
+]

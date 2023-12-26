@@ -3,14 +3,12 @@ from pathlib import Path
 
 import tensorflow as tf
 from pennylane import numpy as np
-from scikitplot.helpers import binary_ks_curve
 from sklearn.metrics import (
     balanced_accuracy_score,
     cohen_kappa_score,
     f1_score,
     precision_score,
     recall_score,
-    roc_auc_score,
 )
 
 
@@ -62,9 +60,7 @@ class Utils:
             "recall": recall_score(y_true, y_pred_round),
             "f1": f1_score(y_true, y_pred_round),
             "kappa": cohen_kappa_score(y_true, y_pred_round),
-            # "roc_auc": roc_auc_score(y_true, y_pred),
         }
-        # _, _, _, metric["ks"], metric["threshold"], _ = binary_ks_curve(y_true, y_pred)
         return metric
 
     def save_results(self, test=False):
