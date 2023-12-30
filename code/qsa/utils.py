@@ -78,19 +78,22 @@ class Utils:
             "training_type": flag,
             "time_training": self._model.time_training,
         }
+        model_result_path = self.get_result_path(test=test)
 
+        with open(model_result_path / f"{self.seed}.json", "w+") as file:
+            json.dump(json_to_save, file)
+
+    def get_result_path(self, test=False):
         model_result_path = (
             self.path["data"]
             / "results"
             / self._model.name
-            / flag
+            / ("test" if test else "dev")
             / str(self._model.combination_idx)
         )
         if not model_result_path.exists():
             model_result_path.mkdir(parents=True)
-
-        with open(model_result_path / f"{self.seed}.json", "w+") as file:
-            json.dump(json_to_save, file)
+        return model_result_path
 
     def results_exists(self, test=False):
         if test:

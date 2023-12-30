@@ -1,4 +1,5 @@
 import json
+import pickle
 from itertools import product
 
 import keras_nlp
@@ -99,10 +100,8 @@ class Processing:
 
     def process_data(self, test=False):
         self._qsa.df["train"]["data_transformed"] = self._qsa.df["train"]["data"]
-        if test:
-            self._qsa.df["test"]["data_transformed"] = self._qsa.df["test"]["data"]
-        else:
-            self._qsa.df["dev"]["data_transformed"] = self._qsa.df["dev"]["data"]
+        self._qsa.df["test"]["data_transformed"] = self._qsa.df["test"]["data"]
+        self._qsa.df["dev"]["data_transformed"] = self._qsa.df["dev"]["data"]
 
 
 class ClassicalProcessing(Processing):
@@ -195,7 +194,6 @@ class QuantumModel(Model):
 
         best_acc_dev = 0.0
         patience = 20
-        no_improvement_count = 0
         it = 0
 
         weights = weights_init.copy()
@@ -226,7 +224,10 @@ class QuantumModel(Model):
             y_dev = transform_y(self._qsa.df["dev"]["labels"])
 
         if test:
-            for it in range(int(self._actual_params["best_iteration"])):
+            weights, bias, actual_run, _ = self._load_quantum_params(
+                weights, bias, test
+            )
+            for it in range(actual_run, int(self._actual_params["best_iteration"])):
                 weights, bias, _, _ = opt.step(cost, weights, bias, x_train, y_train)
                 results_train = variational_classifier(weights, bias, x_train)
                 results_dev = variational_classifier(weights, bias, x_dev)
@@ -240,6 +241,7 @@ class QuantumModel(Model):
                     "Iter: {:5d} | Cost: {:0.7f} | Acc train: {:0.7f} | Acc dev: {:0.7f} "
                     "".format(it + 1, final_cost, acc_train, acc_dev)
                 )
+                self._save_quantum_params(weights, bias, it, test)
 
             self._ml = {"weights": weights, "bias": bias, "best_iteration": it}
 
@@ -247,7 +249,10 @@ class QuantumModel(Model):
             self.y_pred = np.array(self.y_pred).copy()
             self.y_pred[self.y_pred == -1] = 0
         else:
-            for it in range(1_000_000):
+            weights, bias, actual_run, no_improvement_count = self._load_quantum_params(
+                weights, bias, test
+            )
+            for it in range(actual_run, 1_000_000):
                 weights, bias, _, _ = opt.step(cost, weights, bias, x_train, y_train)
 
                 results_train = variational_classifier(weights, bias, x_train)
@@ -271,6 +276,8 @@ class QuantumModel(Model):
                 else:
                     no_improvement_count += 1
 
+                self._save_quantum_params(weights, bias, it, test, no_improvement_count)
+
                 if no_improvement_count >= patience:
                     print(
                         "Early stopping! No improvement for {} consecutive iterations.".format(
@@ -290,6 +297,30 @@ class QuantumModel(Model):
             )
             self.y_pred = np.array(self.y_pred).copy()
             self.y_pred[self.y_pred == -1] = 0
+
+    def _load_quantum_params(self, weights, bias, test):
+        result_path = self._qsa.get_result_path(test=test)
+        if not (result_path / f"{self._qsa.seed}.pkl").exists():
+            return weights, bias, 0, 0
+        with open(result_path / f"{self._qsa.seed}.pkl", "rb") as file:
+            quantum_params = pickle.load(file)
+        return (
+            quantum_params["weights"],
+            quantum_params["bias"],
+            quantum_params["iteration"] + 1,
+            quantum_params["no_improvement_count"],
+        )
+
+    def _save_quantum_params(self, weights, bias, it, test, no_improvement_count=0):
+        result_path = self._qsa.get_result_path(test=test)
+        quantum_params = {
+            "weights": weights,
+            "bias": bias,
+            "iteration": it,
+            "no_improvement_count": no_improvement_count,
+        }
+        with open(result_path / f"{self._qsa.seed}.pkl", "wb") as file:
+            pickle.dump(quantum_params, file)
 
     def _get_other_savable_params(self):
         return {"best_iteration": self._ml["best_iteration"]}
@@ -491,10 +522,17 @@ class SVC(ClassicalModel, ClassicalProcessing):
         "gamma": ["scale", "auto"],
     }
     _default_params = {
-        "probability": True,
+        "probability": False,
     }
 
     _model_template = skSVC
+
+    def predict(self, test=False):
+        if test:
+            data = self._qsa.df["test"]["data_transformed"]
+        else:
+            data = self._qsa.df["dev"]["data_transformed"]
+        self.y_pred = self._ml.predict(data)
 
 
 class BERT(Model, ClassicalProcessing):
@@ -517,12 +555,17 @@ class BERT(Model, ClassicalProcessing):
         self.y_pred = self._ml.predict(data)[:, 1]
 
 
-models_template = [
-    XGBoost,
-    RandomForest,
-    SVC,
-    BERT,
-    QuantumAnsatz6,
-    QuantumAnsatz6Modified,
-    StrongAnsatz,
-]
+models_template_gpu = {
+    XGBoost.name: XGBoost,
+    RandomForest.name: RandomForest,
+    BERT.name: BERT,
+}
+
+models_template_cpu = {
+    QuantumAnsatz6.name: QuantumAnsatz6,
+    QuantumAnsatz6Modified.name: QuantumAnsatz6Modified,
+    StrongAnsatz.name: StrongAnsatz,
+    SVC.name: SVC,
+}
+
+models_template_all = {**models_template_gpu, **models_template_cpu}
