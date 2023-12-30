@@ -1,3 +1,4 @@
+import os
 from itertools import product, repeat
 from time import time
 
@@ -14,7 +15,7 @@ class QSA(Utils):
         self.df = Preprocessing().load_dataset()
 
     def run(self):
-        self._run_models(models_template_cpu, n_jobs=-1)
+        self._run_models(models_template_cpu, n_jobs=8)
         self._run_models(models_template_gpu, n_jobs=1)
 
     def _run_models(self, models_template, n_jobs):
