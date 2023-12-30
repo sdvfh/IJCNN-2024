@@ -491,10 +491,17 @@ class SVC(ClassicalModel, ClassicalProcessing):
         "gamma": ["scale", "auto"],
     }
     _default_params = {
-        "probability": True,
+        "probability": False,
     }
 
     _model_template = skSVC
+
+    def predict(self, test=False):
+        if test:
+            data = self._qsa.df["test"]["data_transformed"]
+        else:
+            data = self._qsa.df["dev"]["data_transformed"]
+        self.y_pred = self._ml.predict(data)
 
 
 class BERT(Model, ClassicalProcessing):
