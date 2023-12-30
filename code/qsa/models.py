@@ -99,10 +99,8 @@ class Processing:
 
     def process_data(self, test=False):
         self._qsa.df["train"]["data_transformed"] = self._qsa.df["train"]["data"]
-        if test:
-            self._qsa.df["test"]["data_transformed"] = self._qsa.df["test"]["data"]
-        else:
-            self._qsa.df["dev"]["data_transformed"] = self._qsa.df["dev"]["data"]
+        self._qsa.df["test"]["data_transformed"] = self._qsa.df["test"]["data"]
+        self._qsa.df["dev"]["data_transformed"] = self._qsa.df["dev"]["data"]
 
 
 class ClassicalProcessing(Processing):
@@ -524,12 +522,17 @@ class BERT(Model, ClassicalProcessing):
         self.y_pred = self._ml.predict(data)[:, 1]
 
 
-models_template = [
-    XGBoost,
-    RandomForest,
-    SVC,
-    BERT,
-    QuantumAnsatz6,
-    QuantumAnsatz6Modified,
-    StrongAnsatz,
-]
+models_template_gpu = {
+    XGBoost.name: XGBoost,
+    RandomForest.name: RandomForest,
+    BERT.name: BERT,
+}
+
+models_template_cpu = {
+    SVC.name: SVC,
+    QuantumAnsatz6.name: QuantumAnsatz6,
+    QuantumAnsatz6Modified.name: QuantumAnsatz6Modified,
+    StrongAnsatz.name: StrongAnsatz,
+}
+
+models_template_all = {**models_template_gpu, **models_template_cpu}
