@@ -562,10 +562,10 @@ models_template_gpu = {
 }
 
 models_template_cpu = {
-    SVC.name: SVC,
     QuantumAnsatz6.name: QuantumAnsatz6,
     QuantumAnsatz6Modified.name: QuantumAnsatz6Modified,
     StrongAnsatz.name: StrongAnsatz,
+    SVC.name: SVC,
 }
 
 models_template_all = {**models_template_gpu, **models_template_cpu}
