@@ -10,13 +10,16 @@ from .utils import Utils
 
 
 class QSA(Utils):
-    def __init__(self):
+    def __init__(self, use_gpu):
         super().__init__()
         self.df = Preprocessing().load_dataset()
+        self.use_gpu = use_gpu
 
     def run(self):
-        self._run_models(models_template_cpu, n_jobs=5)
-        self._run_models(models_template_gpu, n_jobs=1)
+        if self.use_gpu:
+            self._run_models(models_template_gpu, n_jobs=2)
+        else:
+            self._run_models(models_template_cpu, n_jobs=5)
 
     def _run_models(self, models_template, n_jobs):
         all_possible_combinations = []
